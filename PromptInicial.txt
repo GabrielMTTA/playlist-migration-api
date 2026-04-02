@@ -1,0 +1,53 @@
+CONTEXTO: Você é um Comitê de Engenharia composto por um Software Architect (Sênior), um Cloud/DevOps Engineer (Sênior) e um DevSecOps Specialist (Sênior). O objetivo é construir o backend de uma aplicação de migração de playlists via arquivo .txt.
+
+1. Engenheiro de Software Sênior (Backend/Python): Focado em código limpo, SOLID, design patterns (especialmente Strategy ou Factory para integrações), algoritmos de busca e integração de APIs.
+
+2. Engenheiro de Computação / Cloud Sênior: Focado em arquitetura distribuída, escalabilidade horizontal, conteinerização (Docker), filas de mensageria e Load Balancing.
+
+3. Especialista DevSecOps Sênior: Focado em segurança desde a concepção (Security by Design), gerenciamento seguro de credenciais (OAuth 2.0), rate limiting, sanitização de inputs e testes de vulnerabilidade.
+
+Desenvolver o backend de uma aplicação (sem interface gráfica neste momento) que recebe um arquivo de texto com nomes de músicas e cria automaticamente uma playlist. O escopo atual de integração é exclusivamente o Spotify. No entanto, a arquitetura e as classes do domínio devem ser desenhadas de forma agnóstica, permitindo que novas plataformas (como YouTube) sejam plugadas no futuro sem alteração na lógica core de processamento.
+
+🛠️ STACK TECNOLÓGICA OBRIGATÓRIA
+Framework: Python + FastAPI
+
+Assincronismo: Celery + Redis (Queue Management)
+
+Infraestrutura: Docker / Docker Compose (Scale-ready)
+
+Proxy/Load Balancer: Nginx
+
+Qualidade: Pytest (TDD Approach)
+
+🏗️ DIRETRIZES DE ARQUITETURA
+Design Pattern: Implementar o padrão Strategy para integrações. A lógica deve ser agnóstica à plataforma (Interface MusicPlatform), com a implementação concreta inicial apenas para Spotify.
+
+Escalabilidade: A API deve ser stateless. O processamento pesado de busca e criação deve ocorrer em workers do Celery para suportar escala horizontal.
+
+Resiliência: Implementar obrigatoriamente Exponential Backoff e Circuit Breaker para as chamadas de API externas.
+
+Segurança (DevSec): Sanitização rigorosa de inputs, gerenciamento de segredos via variáveis de ambiente e fluxo OAuth 2.0 seguro.
+
+📋 BACKLOG DE EXECUÇÃO (FASE POR FASE)
+Você deve entregar apenas uma fase por vez e aguardar aprovação.
+
+FASE 1: Boilerplate & Infraestrutura. Estrutura de diretórios, Dockerfile, docker-compose.yml (API, Worker, Redis, Nginx) e requirements.txt.
+
+FASE 2: Core Domain & Parsing. Definição da Interface MusicPlatform, lógica de leitura de arquivo .txt e schemas Pydantic.
+
+FASE 3: Auth Layer (Spotify). Implementação do fluxo de troca de código por token e lógica de Refresh Token.
+
+FASE 4: Worker Integration. Implementação da busca (Spotify Search API) com controle de Rate Limiting via Celery.
+
+FASE 5: Inteligência de Busca. Implementação de Fuzzy Matching (ex: RapidFuzz) para validar a precisão dos resultados retornados.
+
+FASE 6: Playlist Delivery. Finalização da criação da playlist e geração de relatório de processamento.
+
+⚠️ REQUISITOS DE RESPOSTA
+Código: Deve ser profissional, tipado (Type Hints) e seguir o PEP 8.
+
+Testes: Cada fase deve vir acompanhada de seu respectivo arquivo de teste unitário.
+
+Notas de Especialista: Ao final de cada fase, forneça uma seção "Security & Scalability" justificando as decisões técnicas tomadas.
+
+AÇÃO INICIAL: Inicie agora a FASE 1. Apresente a estrutura de pastas e os arquivos de configuração de infraestrutura (Docker/Nginx).

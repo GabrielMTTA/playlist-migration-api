@@ -1,0 +1,3 @@
+@echo off
+echo Starting Redis...
+"D:\Trampo\Redis\redis-server.exe" --requirepass changeme --maxmemory 128mb --maxmemory-policy allkeys-lru

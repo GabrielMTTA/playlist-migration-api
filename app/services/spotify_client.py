@@ -122,7 +122,7 @@ class SpotifyClient(MusicPlatform):
                 add_response = await request_with_backoff(
                     client,
                     "POST",
-                    f"{self._base_url}/playlists/{playlist_id}/tracks",
+                    f"{self._base_url}/playlists/{playlist_id}/items",
                     config=_backoff,
                     headers=headers,
                     json={"uris": batch},

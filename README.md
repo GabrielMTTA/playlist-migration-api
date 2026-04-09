@@ -2,7 +2,7 @@
 
 Backend API para migração de playlists a partir de arquivos `.txt` para plataformas de streaming. Atualmente suporta **Spotify**, com arquitetura extensível para futuras plataformas (YouTube Music, Deezer, etc.).
 
-> **Status:** Backend completo com 142 testes passando. Requer Spotify Premium para uso em produção (limitação da API do Spotify para apps em Development Mode).
+> **Status:** E2E validado com sucesso — 142 testes unitários + teste real com playlist de 19 faixas (94.7% match rate). Requer Spotify Premium + app em Development Mode com Web API habilitada.
 
 ---
 
@@ -27,6 +27,7 @@ Backend API para migração de playlists a partir de arquivos `.txt` para plataf
 - [Segurança](#segurança)
 - [Testes](#testes)
 - [Configuração do Spotify Developer](#configuração-do-spotify-developer)
+- [Teste E2E Real](#teste-e2e-real)
 
 ---
 
@@ -440,12 +441,29 @@ O sistema usa **3 estratégias combinadas** para validar resultados da busca:
 - Remoção de caracteres especiais
 - Colapso de espaços
 
-**Exemplo:**
+**Exemplos reais (teste E2E):**
 ```
-Input:    "Radiohead - Creep (Acoustic Version)"
-Spotify:  "Creep" by Radiohead
-Score:    95.2% → FOUND ✓
+Input:    "Trivium - Unti   The World Goes Cold"  (typo + espaços extras)
+Spotify:  "Until The World Goes Cold" by Trivium
+Score:    98% → FOUND ✓
+
+Input:    "TPIY = Left behind"  (abreviação + separador errado)
+Spotify:  "Left Behind" by The Plot In You
+Score:    78% → FOUND ✓
+
+Input:    "Bring Me The Horizon - DArkSide"  (capitalização errada)
+Spotify:  "DArkSide" by Bring Me The Horizon
+Score:    100% → FOUND ✓
+
+Input:    "Hamurabi"  (sem artista)
+Spotify:  "Hamurabi" by There's No Face
+Score:    100% → FOUND ✓
+
+Input:    "BMTH - Doomed (maphra)"  (abreviação não resolvível)
+Score:    0% → NOT FOUND ✗
 ```
+
+**Limitação conhecida:** Abreviações de nomes de banda (MIW, BMTH) não são resolvidas automaticamente — a busca do Spotify não retorna resultados para siglas.
 
 ---
 
@@ -493,10 +511,15 @@ pytest tests/test_phase4_worker.py -v
 1. Acesse o [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 2. Crie um novo app com nome descritivo
 3. Em **Redirect URIs**, adicione: `http://127.0.0.1:8080/api/v1/auth/callback`
-4. Selecione **Web API** como API utilizada
-5. Copie o **Client ID** e **Client Secret** para o `.env`
+4. Selecione **Web API** como API/SDK utilizada
+5. Em **User Management**, adicione o email da conta Spotify que usará o app
+6. Copie o **Client ID** e **Client Secret** para o `.env`
 
-> **Nota:** Apps em Development Mode requerem que o owner tenha **Spotify Premium** para acessar a Web API (Search, Create Playlist). Sem Premium, a API retorna 403 Forbidden.
+> **Importante (Development Mode):**
+> - Requer **Spotify Premium** na conta do owner
+> - Apenas usuários listados em **User Management** podem usar operações de escrita (criar playlist, adicionar tracks)
+> - Máximo de **5 usuários** em Development Mode
+> - A API usa endpoints `/me/playlists` e `/playlists/{id}/items` (compatíveis com Dev Mode)
 
 ---
 
@@ -521,6 +544,65 @@ PlatformFactory.register(PlatformEnum.YOUTUBE, YouTubeClient)
 ```
 
 Nenhuma alteração necessária na lógica de processamento, workers ou routes.
+
+---
+
+## Teste E2E Real
+
+Teste realizado com uma playlist real de 19 faixas de metalcore/post-hardcore:
+
+```
+============================================================
+  PLAYLIST MIGRATION REPORT
+  Generated: 2026-04-09 02:10:44 UTC
+============================================================
+
+SUMMARY
+----------------------------------------
+  Total tracks:     19
+  Found:            18
+  Not found:        1
+  Errors:           0
+  Success rate:     94.7%
+
+  Playlist URL: https://open.spotify.com/playlist/0HLLTzqP2AwcvjGmW8r3GC
+
+TRACK DETAILS
+----------------------------------------
+
+  FOUND (18):
+    [OK]  Motionless In White - Afraid of the dark  (confidence: 100%)
+    [OK]  BO - like a villain  (confidence: 69%)
+    [OK]  I Prevail - RAIN  (confidence: 100%)
+    [OK]  TPIY = Left behind  (confidence: 78%)
+    [OK]  The Amity Affliction - Death's Hand  (confidence: 100%)
+    [OK]  Bring Me The Horizon - 1x1  (confidence: 100%)
+    [OK]  Trivium - Unti   The World Goes Cold  (confidence: 98%)
+    [OK]  Bring Me The Horizon - DArkSide  (confidence: 100%)
+    [OK]  Falling In Reverse - "God Is A Weapon  (confidence: 100%)
+    [OK]  Poppy - New Way Out  (confidence: 100%)
+    [OK]  POPPY, AMY LEE, COURTNEY LAPLANTE - End of You  (confidence: 64%)
+    [OK]  Pierce The Veil - King for a Day  (confidence: 100%)
+    [OK]  Motionless In White - Masterpiece  (confidence: 100%)
+    [OK]  Bring Me The Horizon - sTraNgeRs  (confidence: 100%)
+    [OK]  Motionless In White - Werewolf  (confidence: 100%)
+    [OK]  There's No Face - Hamurabi  (confidence: 100%)
+    [OK]  BAD OMENS - Dying To Love  (confidence: 100%)
+    [OK]  Motionless In White - Cyberhex  (confidence: 100%)
+
+  NOT FOUND (1):
+    [--]  Bring Me The Horizon - Doomed (maphra)  (best match confidence: 0%)
+
+============================================================
+```
+
+**Desafios superados pelo fuzzy matching:**
+- Typos: `Unti` → `Until` (98% confidence)
+- Separador errado: `TPIY = Left behind` (78%)
+- Capitalização inconsistente: `DArkSide`, `sTraNgeRs` (100%)
+- Aspas soltas: `"God Is A Weapon` (100%)
+- Sem artista: `Hamurabi` → encontrou `There's No Face - Hamurabi` (100%)
+- Múltiplos artistas: `POPPY, AMY LEE, COURTNEY LAPLANTE` (64%)
 
 ---
 

@@ -53,7 +53,7 @@ class SpotifyAuthService:
             "redirect_uri": self._redirect_uri,
             "scope": self._scopes,
             "state": state,
-            "show_dialog": "false",
+            "show_dialog": "true",
         }
         query = "&".join(f"{k}={httpx.QueryParams({k: v})}" for k, v in params.items())
         # Use httpx to properly encode

@@ -88,8 +88,6 @@ class SpotifyClient(MusicPlatform):
         """Create a Spotify playlist and add tracks to it."""
         _circuit.ensure_closed()
 
-        user_id = await self.get_user_id(access_token)
-
         async with httpx.AsyncClient(timeout=15.0) as client:
             headers = {
                 "Authorization": f"Bearer {access_token}",
@@ -100,13 +98,13 @@ class SpotifyClient(MusicPlatform):
             response = await request_with_backoff(
                 client,
                 "POST",
-                f"{self._base_url}/users/{user_id}/playlists",
+                f"{self._base_url}/me/playlists",
                 config=_backoff,
                 headers=headers,
                 json={"name": name, "public": False},
             )
 
-            if response.status_code != 201:
+            if response.status_code not in (200, 201):
                 _circuit.record_failure()
                 raise RuntimeError(
                     f"Failed to create playlist ({response.status_code}): "
@@ -129,7 +127,7 @@ class SpotifyClient(MusicPlatform):
                     headers=headers,
                     json={"uris": batch},
                 )
-                if add_response.status_code != 201:
+                if add_response.status_code not in (200, 201):
                     logger.warning(
                         "Failed to add batch %d to playlist: %s",
                         i // 100, add_response.text,

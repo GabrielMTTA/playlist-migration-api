@@ -24,6 +24,20 @@ class Track:
     confidence: float = 0.0
 
 
+@dataclass(frozen=True)
+class MatchCandidate:
+    """Platform-agnostic search result for fuzzy matching.
+
+    Each platform client converts its API response items into
+    MatchCandidate instances before passing them to the matcher.
+    """
+
+    id: str
+    uri: str
+    title: str
+    artist: str
+
+
 @dataclass
 class PlaylistRequest:
     """Represents a full playlist creation job."""

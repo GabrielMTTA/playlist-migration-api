@@ -12,12 +12,14 @@ from app.domain.models import Track, TrackStatus, ProcessingResult
 from app.schemas.playlist import PlatformEnum
 from app.services.platform_factory import PlatformFactory
 from app.services.spotify_client import SpotifyClient
+from app.services.youtube_music_client import YouTubeMusicClient
 from app.workers.celery_app import celery
 
 logger = logging.getLogger(__name__)
 
 # Register platforms in worker context
 PlatformFactory.register(PlatformEnum.SPOTIFY, SpotifyClient)
+PlatformFactory.register(PlatformEnum.YOUTUBE_MUSIC, YouTubeMusicClient)
 
 
 @celery.task(

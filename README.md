@@ -1,90 +1,97 @@
-# 🎵 Playlist Migration API
+# Playlist Migration API
 
-Backend API para migração de playlists a partir de arquivos `.txt` para plataformas de streaming. Atualmente suporta **Spotify**, com arquitetura extensível para futuras plataformas (YouTube Music, Deezer, etc.).
+Backend API para migrar playlists a partir de arquivos `.txt` para plataformas de streaming. Suporta **Spotify** e **YouTube Music**, com arquitetura extensivel para futuras plataformas.
 
-> **Status:** E2E validado com sucesso — 142 testes unitários + teste real com playlist de 19 faixas (94.7% match rate). Requer Spotify Premium + app em Development Mode com Web API habilitada.
+> **Status:** E2E validado com sucesso em ambas as plataformas — 209 testes unitarios + testes reais com playlist de 19 faixas (Spotify: 94.7% match rate | YouTube Music: 100% match rate).
 
 ---
 
-## Índice
+## Indice
 
-- [Visão Geral](#visão-geral)
+- [Visao Geral](#visao-geral)
 - [Arquitetura](#arquitetura)
 - [Tech Stack](#tech-stack)
 - [Estrutura do Projeto](#estrutura-do-projeto)
-- [Instalação e Setup](#instalação-e-setup)
-  - [Com Docker](#com-docker)
-  - [Sem Docker (Local)](#sem-docker-local)
-- [Configuração](#configuração)
+- [Instalacao e Setup](#instalacao-e-setup)
+- [Configuracao](#configuracao)
 - [Endpoints da API](#endpoints-da-api)
-  - [Autenticação (OAuth 2.0)](#autenticação-oauth-20)
-  - [Playlists](#playlists)
-  - [Health Check](#health-check)
 - [Formato do Arquivo .txt](#formato-do-arquivo-txt)
 - [Pipeline de Processamento](#pipeline-de-processamento)
-- [Padrões de Resiliência](#padrões-de-resiliência)
+- [Padroes de Resiliencia](#padroes-de-resiliencia)
 - [Fuzzy Matching](#fuzzy-matching)
-- [Segurança](#segurança)
+- [Search Cache (Redis)](#search-cache-redis)
+- [Seguranca](#seguranca)
 - [Testes](#testes)
-- [Configuração do Spotify Developer](#configuração-do-spotify-developer)
-- [Teste E2E Real](#teste-e2e-real)
+- [Configuracao do Spotify Developer](#configuracao-do-spotify-developer)
+- [Configuracao do Google Cloud (YouTube Music)](#configuracao-do-google-cloud-youtube-music)
+- [Teste E2E Real — Spotify](#teste-e2e-real--spotify)
+- [Teste E2E Real — YouTube Music](#teste-e2e-real--youtube-music)
 
 ---
 
-## Visão Geral
+## Visao Geral
 
-O **Playlist Migration API** recebe um arquivo `.txt` com nomes de músicas (ou um payload JSON), busca cada faixa na API do Spotify usando fuzzy matching, e cria uma playlist na conta do usuário autenticado.
+O **Playlist Migration API** recebe um arquivo `.txt` com nomes de musicas (ou um payload JSON), busca cada faixa na API da plataforma escolhida usando fuzzy matching, e cria uma playlist na conta do usuario autenticado.
+
+**Plataformas suportadas:**
+- **Spotify** — via Spotify Web API
+- **YouTube Music** — via YouTube Data API v3
+
+**O usuario escolhe a plataforma por request** — as plataformas funcionam de forma totalmente independente. Nao e necessario ter conta em ambas.
 
 **Fluxo resumido:**
 
 ```
-Upload .txt → Parse → Celery Task → Search (Spotify API) → Fuzzy Match → Create Playlist → Report
+Upload .txt -> Parse -> Celery Task -> Search (API) -> Fuzzy Match -> Create Playlist -> Report
 ```
 
-O processamento é **assíncrono** via Celery — o cliente recebe um `task_id` imediatamente e pode acompanhar o progresso via polling.
+O processamento e **assincrono** via Celery — o cliente recebe um `task_id` imediatamente e pode acompanhar o progresso via polling.
 
 ---
 
 ## Arquitetura
 
 ```
-┌─────────┐     ┌───────────┐     ┌──────────────┐     ┌─────────┐
-│  Client  │────▶│   Nginx   │────▶│   FastAPI    │────▶│  Redis  │
-│          │     │ (reverse  │     │  (API x2)    │     │ (broker │
-│          │     │  proxy)   │     │              │     │  + backend)
-└─────────┘     └───────────┘     └──────┬───────┘     └────┬────┘
-                                         │                   │
-                                         │    ┌──────────────┘
-                                         ▼    ▼
-                                  ┌──────────────┐     ┌─────────────┐
-                                  │ Celery Worker │────▶│ Spotify API │
-                                  │    (x2)       │     │             │
-                                  └──────────────┘     └─────────────┘
+                                                          +---------------+
+                                                     +--->| Spotify API   |
++---------+     +-----------+     +--------------+   |    +---------------+
+| Client  |---->|   Nginx   |---->|   FastAPI    |---+
+|         |     | (reverse  |     |  (API x2)    |   |    +---------------+
+|         |     |  proxy)   |     |              |   +--->| YouTube API   |
++---------+     +-----------+     +------+-------+   |    +---------------+
+                                         |           |
+                                         v           |    +---------------+
+                                  +--------------+   +--->|    Redis      |
+                                  | Celery Worker|        | (broker +     |
+                                  |    (x2)      |------->|  backend +    |
+                                  +--------------+        |  search cache)|
+                                                          +---------------+
 ```
 
 ### Design Patterns
 
-| Padrão | Uso |
+| Padrao | Uso |
 |--------|-----|
-| **Strategy** | Interface `MusicPlatform` com implementação `SpotifyClient` — desacopla a lógica de processamento da plataforma |
-| **Factory** | `PlatformFactory` com registro dinâmico — adicionar nova plataforma = 1 classe + 1 linha de registro |
-| **Circuit Breaker** | Fail-fast após falhas consecutivas na API externa |
+| **Strategy** | Interface `MusicPlatform` com implementacoes `SpotifyClient` e `YouTubeMusicClient` |
+| **Factory** | `PlatformFactory` + `OAuthProviderFactory` — registro dinamico, adicionar nova plataforma = 1 classe + 1 linha |
+| **Abstract Base Class** | `OAuthProvider` ABC generaliza o fluxo OAuth para multiplos provedores (Spotify, Google) |
+| **Circuit Breaker** | Fail-fast apos falhas consecutivas na API externa |
 | **Exponential Backoff** | Retry inteligente com suporte a `Retry-After` header |
 
 ---
 
 ## Tech Stack
 
-| Componente | Tecnologia | Versão |
+| Componente | Tecnologia | Versao |
 |-----------|------------|--------|
 | API Framework | FastAPI + Uvicorn | 0.115.6 |
 | Task Queue | Celery | 5.4.0 |
-| Broker/Backend | Redis | 7 (Alpine) |
+| Broker/Backend/Cache | Redis | 7 (Alpine) |
 | HTTP Client | httpx (async) | 0.28.1 |
 | Fuzzy Matching | RapidFuzz | 3.11.0 |
-| Validação | Pydantic | 2.10.4 |
+| Validacao | Pydantic | 2.10.4 |
 | Reverse Proxy | Nginx | 1.27 |
-| Containerização | Docker + Compose | - |
+| Containerizacao | Docker + Compose | - |
 | Testes | Pytest + pytest-asyncio | 8.3.4 |
 | Linting | Ruff | 0.8.6 |
 
@@ -93,71 +100,70 @@ O processamento é **assíncrono** via Celery — o cliente recebe um `task_id` 
 ## Estrutura do Projeto
 
 ```
-├── app/
-│   ├── main.py                    # Entry point — FastAPI app
-│   ├── api/
-│   │   ├── dependencies.py        # Bearer token extraction
-│   │   └── routes/
-│   │       ├── auth.py            # OAuth 2.0 endpoints
-│   │       └── playlist.py        # Playlist CRUD + task status
-│   ├── core/
-│   │   ├── config.py              # Settings (env vars via Pydantic)
-│   │   └── resilience.py          # Circuit Breaker + Backoff
-│   ├── domain/
-│   │   ├── interfaces.py          # MusicPlatform (Strategy interface)
-│   │   └── models.py              # Track, PlaylistRequest, ProcessingResult
-│   ├── schemas/
-│   │   ├── auth.py                # Auth request/response schemas
-│   │   └── playlist.py            # Playlist schemas + PlatformEnum
-│   ├── services/
-│   │   ├── file_parser.py         # .txt parser (sanitização + parsing)
-│   │   ├── fuzzy_matcher.py       # RapidFuzz multi-strategy matching
-│   │   ├── platform_factory.py    # Registry-based factory
-│   │   ├── report_generator.py    # Text + JSON report generation
-│   │   ├── spotify_auth.py        # Spotify OAuth 2.0 service
-│   │   └── spotify_client.py      # Spotify Web API client
-│   └── workers/
-│       ├── celery_app.py          # Celery configuration
-│       └── tasks.py               # Async task: search + create playlist
-├── tests/
-│   ├── conftest.py                # Fixtures compartilhadas
-│   ├── test_phase1_infra.py       # Infraestrutura e boilerplate
-│   ├── test_phase2_domain.py      # Domain models e file parser
-│   ├── test_phase3_auth.py        # OAuth 2.0 flow
-│   ├── test_phase4_worker.py      # Worker, resilience, SpotifyClient
-│   ├── test_phase5_fuzzy.py       # Fuzzy matching
-│   └── test_phase6_delivery.py    # Reports e integração end-to-end
-├── nginx/
-│   └── nginx.conf                 # Rate limiting, security headers, proxy
-├── Dockerfile                     # Multi-stage (api + worker targets)
-├── docker-compose.yml             # Full stack orchestration
-├── requirements.txt               # Python dependencies
-├── .env.example                   # Template de variáveis de ambiente
-├── start_api.bat                  # Windows: iniciar API local
-├── start_redis.bat                # Windows: iniciar Redis local
-└── start_worker.bat               # Windows: iniciar Celery worker local
+app/
+├── main.py                        # Entry point — FastAPI app + factory registrations
+├── api/
+│   ├── dependencies.py            # Bearer token extraction
+│   └── routes/
+│       ├── auth.py                # OAuth 2.0 endpoints (multi-platform)
+│       └── playlist.py            # Playlist CRUD + task status
+├── core/
+│   ├── config.py                  # Settings (env vars via Pydantic)
+│   └── resilience.py              # Circuit Breaker + Backoff
+├── domain/
+│   ├── interfaces.py              # MusicPlatform (Strategy interface)
+│   └── models.py                  # Track, MatchCandidate, ProcessingResult
+├── schemas/
+│   ├── auth.py                    # Auth request/response schemas
+│   └── playlist.py                # Playlist schemas + PlatformEnum
+├── services/
+│   ├── oauth/                     # OAuth provider package
+│   │   ├── base.py                # OAuthProvider ABC, TokenResponse, OAuthError
+│   │   ├── spotify_provider.py    # SpotifyOAuthProvider
+│   │   ├── google_provider.py     # GoogleOAuthProvider (YouTube Music)
+│   │   └── factory.py             # OAuthProviderFactory
+│   ├── spotify_client.py          # Spotify Web API client
+│   ├── youtube_music_client.py    # YouTube Data API v3 client
+│   ├── search_cache.py            # Redis cache for search results
+│   ├── fuzzy_matcher.py           # RapidFuzz multi-strategy matching
+│   ├── file_parser.py             # .txt parser (sanitizacao + parsing)
+│   ├── platform_factory.py        # Registry-based MusicPlatform factory
+│   └── report_generator.py        # Text + JSON report generation
+└── workers/
+    ├── celery_app.py              # Celery configuration
+    └── tasks.py                   # Async task: search + create playlist
+
+tests/
+├── conftest.py                    # Fixtures compartilhadas
+├── test_phase1_infra.py           # Infraestrutura e boilerplate
+├── test_phase2_domain.py          # Domain models e file parser
+├── test_phase3_auth.py            # OAuth 2.0 (Spotify + Google + factory)
+├── test_phase4_worker.py          # Worker, resilience, SpotifyClient
+├── test_phase5_fuzzy.py           # Fuzzy matching + version penalty
+├── test_phase6_delivery.py        # Reports e integracao end-to-end
+└── test_phase10_youtube.py        # YouTubeMusicClient + SearchCache
 ```
 
 ---
 
-## Instalação e Setup
+## Instalacao e Setup
 
-### Pré-requisitos
+### Pre-requisitos
 
-- Python 3.12+
+- Python 3.11+
 - Redis (ou Docker)
-- Conta no [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+- Conta no [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) e/ou [Google Cloud Console](https://console.cloud.google.com)
 
 ### Com Docker
 
 ```bash
-# 1. Clone o repositório
+# 1. Clone o repositorio
 git clone https://github.com/GabrielMTTA/playlist-migration-api.git
 cd playlist-migration-api
 
-# 2. Configure as variáveis de ambiente
+# 2. Configure as variaveis de ambiente
 cp .env.example .env
-# Edite .env com suas credenciais do Spotify
+# Edite .env com suas credenciais
 
 # 3. Suba a stack
 docker compose up --build -d
@@ -167,16 +173,10 @@ docker compose up --build -d
 # http://localhost:8080/health
 ```
 
-A stack Docker inclui:
-- **Nginx** (porta 8080) — reverse proxy com rate limiting
-- **API** (x2 réplicas) — FastAPI
-- **Worker** (x2 réplicas) — Celery
-- **Redis** — broker + result backend
-
 ### Sem Docker (Local)
 
 ```bash
-# 1. Clone e instale as dependências
+# 1. Clone e instale as dependencias
 git clone https://github.com/GabrielMTTA/playlist-migration-api.git
 cd playlist-migration-api
 python -m venv .venv
@@ -186,9 +186,9 @@ pip install -r requirements.txt
 
 # 2. Configure .env
 cp .env.example .env
-# Ajuste REDIS_HOST=127.0.0.1 e suas credenciais Spotify
+# Ajuste REDIS_HOST=127.0.0.1 e suas credenciais
 
-# 3. Inicie os 3 serviços (cada um em um terminal)
+# 3. Inicie os 3 servicos (cada um em um terminal)
 
 # Terminal 1: Redis
 redis-server --port 6379 --requirepass changeme
@@ -206,9 +206,11 @@ celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 
 ---
 
-## Configuração
+## Configuracao
 
-| Variável | Padrão | Descrição |
+### Variaveis de Ambiente
+
+| Variavel | Padrao | Descricao |
 |----------|--------|-----------|
 | `DEBUG` | `false` | Habilita Swagger UI (`/docs`) |
 | `REDIS_PASSWORD` | `changeme` | Senha do Redis |
@@ -216,7 +218,11 @@ celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 | `REDIS_PORT` | `6379` | Porta do Redis |
 | `SPOTIFY_CLIENT_ID` | — | Client ID do Spotify App |
 | `SPOTIFY_CLIENT_SECRET` | — | Client Secret do Spotify App |
-| `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8080/api/v1/auth/callback` | Redirect URI (deve bater com o Dashboard) |
+| `SPOTIFY_REDIRECT_URI` | `.../api/v1/auth/spotify/callback` | Redirect URI do Spotify |
+| `GOOGLE_CLIENT_ID` | — | Client ID do Google OAuth |
+| `GOOGLE_CLIENT_SECRET` | — | Client Secret do Google OAuth |
+| `GOOGLE_REDIRECT_URI` | `.../api/v1/auth/youtube_music/callback` | Redirect URI do Google |
+| `SEARCH_CACHE_TTL` | `86400` | TTL do cache de busca em segundos (24h) |
 | `CELERY_BROKER_URL` | *(Redis URL)* | Override opcional do broker |
 | `CELERY_RESULT_BACKEND` | *(Redis URL)* | Override opcional do backend |
 
@@ -226,48 +232,55 @@ celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 
 ### Health Check
 
-| Método | Rota | Descrição |
+| Metodo | Rota | Descricao |
 |--------|------|-----------|
-| `GET` | `/health` | Status da aplicação |
+| `GET` | `/health` | Status da aplicacao |
 
-```json
-// Response 200
-{ "status": "healthy" }
-```
+### Autenticacao (OAuth 2.0) — Multi-plataforma
 
-### Autenticação (OAuth 2.0)
-
-| Método | Rota | Descrição |
+| Metodo | Rota | Descricao |
 |--------|------|-----------|
-| `GET` | `/api/v1/auth/login` | Gera URL de autorização do Spotify |
-| `GET` | `/api/v1/auth/callback` | Callback OAuth — troca code por tokens |
-| `POST` | `/api/v1/auth/refresh` | Renova access token expirado |
+| `GET` | `/api/v1/auth/{platform}/login` | Gera URL de autorizacao |
+| `GET` | `/api/v1/auth/{platform}/callback` | Callback OAuth — troca code por tokens |
+| `POST` | `/api/v1/auth/{platform}/refresh` | Renova access token expirado |
 
-**Fluxo de autenticação:**
+Onde `{platform}` e `spotify` ou `youtube_music`.
 
-1. `GET /api/v1/auth/login` → retorna `auth_url` + `state`
-2. Redirecione o usuário para `auth_url`
-3. Spotify redireciona para `/callback?code=...&state=...`
+**Fluxo de autenticacao:**
+
+1. `GET /api/v1/auth/spotify/login` — retorna `auth_url` + `state`
+2. Redirecione o usuario para `auth_url`
+3. Provider redireciona para `/callback?code=...&state=...`
 4. Callback retorna `access_token`, `refresh_token`, `expires_in`
-5. Use o `access_token` como Bearer token nas requisições de playlist
+5. Use o `access_token` como Bearer token nas requisicoes de playlist
 
 ### Playlists
 
-> Todos os endpoints de playlist requerem `Authorization: Bearer <access_token>`
+> Todos os endpoints requerem `Authorization: Bearer <access_token>`
 
-| Método | Rota | Descrição |
+| Metodo | Rota | Descricao |
 |--------|------|-----------|
 | `POST` | `/api/v1/playlists/upload` | Upload de arquivo `.txt` |
 | `POST` | `/api/v1/playlists/` | Criar playlist via JSON |
 | `GET` | `/api/v1/playlists/tasks/{id}` | Status do processamento |
-| `GET` | `/api/v1/playlists/tasks/{id}/report` | Relatório JSON estruturado |
-| `GET` | `/api/v1/playlists/tasks/{id}/report/text` | Relatório em texto plano |
+| `GET` | `/api/v1/playlists/tasks/{id}/report` | Relatorio JSON estruturado |
+| `GET` | `/api/v1/playlists/tasks/{id}/report/text` | Relatorio em texto plano |
 
-**Exemplo — Upload de arquivo:**
+**Exemplo — Upload para YouTube Music:**
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/playlists/upload \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer <youtube_token>" \
+  -F "file=@playlist.txt" \
+  -F "platform=youtube_music" \
+  -F "playlist_name=My Playlist"
+```
+
+**Exemplo — Upload para Spotify:**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/playlists/upload \
+  -H "Authorization: Bearer <spotify_token>" \
   -F "file=@playlist.txt" \
   -F "platform=spotify" \
   -F "playlist_name=My Playlist"
@@ -278,68 +291,12 @@ curl -X POST http://127.0.0.1:8080/api/v1/playlists/upload \
 { "task_id": "a1b2c3d4-...", "message": "Playlist creation job queued" }
 ```
 
-**Exemplo — JSON payload:**
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/playlists/ \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "platform": "spotify",
-    "playlist_name": "Rock Classics",
-    "track_names": ["Radiohead - Creep", "Nirvana - Smells Like Teen Spirit"]
-  }'
-```
-
-**Exemplo — Polling de status:**
-
-```json
-// GET /api/v1/playlists/tasks/{task_id}
-
-// Em processamento
-{ "task_id": "...", "status": "processing", "result": { "current": 5, "total": 10, "found": 3 } }
-
-// Completo
-{ "task_id": "...", "status": "completed", "result": { "total": 10, "found": 8, "not_found": 2, "errors": 0, "success_rate": 80.0, "playlist_url": "https://open.spotify.com/playlist/..." } }
-```
-
-**Exemplo — Relatório em texto:**
-
-```
-============================================================
-  PLAYLIST MIGRATION REPORT
-  Generated: 2026-04-02 15:30:00 UTC
-============================================================
-
-SUMMARY
-----------------------------------------
-  Total tracks:     10
-  Found:            8
-  Not found:        2
-  Errors:           0
-  Success rate:     80.0%
-
-  Playlist URL: https://open.spotify.com/playlist/abc123
-
-TRACK DETAILS
-----------------------------------------
-  FOUND (8):
-    [OK]  Radiohead - Creep  (confidence: 95%, uri: spotify:track:...)
-    [OK]  Nirvana - Smells Like Teen Spirit  (confidence: 92%, uri: spotify:track:...)
-    ...
-  NOT FOUND (2):
-    [--]  Unknown Artist - Mystery Song  (best match confidence: 45%)
-    ...
-
-============================================================
-```
-
 ---
 
 ## Formato do Arquivo .txt
 
 ```text
-# Comentários são ignorados (linhas começando com #)
+# Comentarios sao ignorados (linhas comecando com #)
 Radiohead - Creep
 Nirvana - Smells Like Teen Spirit
 Bohemian Rhapsody
@@ -348,150 +305,173 @@ Imagine
 ```
 
 **Regras:**
-- Formato por linha: `Artista - Título` ou apenas `Título`
-- Linhas vazias e comentários (`#`) são ignorados
-- Máximo: **500 linhas**, **300 caracteres** por linha
-- Tamanho máximo do arquivo: **1 MB**
+- Formato por linha: `Artista - Titulo` ou apenas `Titulo`
+- Linhas vazias e comentarios (`#`) sao ignorados
+- Maximo: **500 linhas**, **300 caracteres** por linha
+- Tamanho maximo do arquivo: **1 MB**
 - Encoding: **UTF-8**
-- Caracteres de controle são automaticamente removidos
 
 ---
 
 ## Pipeline de Processamento
 
 ```
-1. PARSE          Arquivo .txt → lista de Track objects
-                  (sanitização, validação, split artist/title)
+1. PARSE          Arquivo .txt -> lista de Track objects
 
-2. QUEUE          Celery task criada → task_id retornado ao cliente
-                  (processamento assíncrono)
+2. QUEUE          Celery task criada -> task_id retornado ao cliente
 
 3. SEARCH         Para cada track:
-                  → Busca na Spotify Search API
-                  → Fuzzy match nos resultados
-                  → Marca como FOUND/NOT_FOUND/ERROR
+                  -> [YouTube] Verifica cache Redis (economia de quota)
+                  -> Busca na API da plataforma
+                  -> Fuzzy match nos resultados (com version penalty)
+                  -> Marca como FOUND/NOT_FOUND/ERROR
 
-4. CREATE         Tracks FOUND → URI coletadas → Playlist criada
-                  (batch de 100 tracks por request)
+4. CREATE         Tracks FOUND -> IDs coletados -> Playlist criada
+                  Spotify: batch de 100 tracks
+                  YouTube: 1 video por request (limitacao da API)
 
 5. REPORT         ProcessingResult serializado
-                  → Disponível via /tasks/{id}/report
+                  -> Disponivel via /tasks/{id}/report
 ```
-
-**Progress tracking:** O worker atualiza o estado da task a cada track processada, permitindo ao cliente acompanhar o progresso em tempo real via polling.
 
 ---
 
-## Padrões de Resiliência
+## Padroes de Resiliencia
 
 ### Exponential Backoff
 
-Retry automático para status codes retryable (429, 500, 502, 503, 504):
+Retry automatico para status codes retryable (429, 500, 502, 503, 504):
 
 ```
 Tentativa 0: delay = 1.0s
 Tentativa 1: delay = 2.0s
 Tentativa 2: delay = 4.0s
-Tentativa 3: delay = 8.0s
-...
 Cap: max_delay = 30s
 ```
 
-- Respeita o header `Retry-After` do Spotify (rate limiting)
-- Configurável via `BackoffConfig`
+- Respeita o header `Retry-After` (rate limiting)
+- Configuravel via `BackoffConfig`
 
 ### Circuit Breaker
 
-Previne cascata de falhas quando a API externa está indisponível:
+Previne cascata de falhas quando a API externa esta indisponivel:
 
 ```
-CLOSED  ──(5 falhas)──▶  OPEN  ──(60s timeout)──▶  HALF_OPEN
-   ▲                       │                           │
-   │                       │                           │
-   └──(sucesso)────────────┘     ┌─(sucesso)───────────┘
-                                 │
-                                 ▼
-                              CLOSED
+CLOSED  --(falhas)--> OPEN  --(timeout)--> HALF_OPEN
+  ^                     |                      |
+  +------(sucesso)------+      (sucesso)-------+
 ```
 
-| Estado | Comportamento |
-|--------|--------------|
-| **CLOSED** | Requests passam normalmente; falhas são contadas |
-| **OPEN** | Requests bloqueados imediatamente (fail-fast) |
-| **HALF_OPEN** | 1 request de teste permitido; sucesso fecha, falha reabre |
+| Plataforma | Threshold | Recovery Timeout |
+|------------|-----------|------------------|
+| Spotify | 5 falhas | 60s |
+| YouTube Music | 5 falhas | 120s (mais conservador por causa da quota) |
 
 ---
 
 ## Fuzzy Matching
 
-O sistema usa **3 estratégias combinadas** para validar resultados da busca:
+O sistema usa **3 estrategias combinadas** para validar resultados da busca:
 
-| Estratégia | Peso | Descrição |
+| Estrategia | Peso | Descricao |
 |-----------|------|-----------|
-| Full Ratio | 45% | Comparação direta da string completa |
+| Full Ratio | 45% | Comparacao direta da string completa |
 | Token Sort Ratio | 35% | Ignora ordem das palavras |
 | Partial Ratio | 20% | Matching de substring |
 
-**Threshold padrão:** 60% de confiança mínima para aceitar um match.
+**Threshold padrao:** 60% de confianca minima para aceitar um match.
 
-**Normalização aplicada:**
+### Normalizacao
+
 - Lowercase
-- Remoção de acentos (Unicode NFKD)
-- Remoção de conteúdo entre parênteses/colchetes (remixes, feat., etc.)
-- Remoção de caracteres especiais
-- Colapso de espaços
+- Remocao de acentos (Unicode NFKD)
+- Remocao de conteudo entre parenteses/colchetes (remixes, feat., etc.)
+- Remocao de caracteres especiais
+- Colapso de espacos
 
-**Exemplos reais (teste E2E):**
+### Version Penalty (Penalidade de Versao)
+
+O matcher aplica penalidades automaticas quando o candidato e uma versao diferente do que o usuario pediu:
+
+| Categoria | Keywords detectados | Penalidade | Motivo |
+|-----------|-------------------|------------|--------|
+| **Hard** | `live`, `ao vivo`, `live at`, `live from`, `live session`, `acoustic`, `remix` | **50%** | Versoes musicalmente diferentes |
+| **Soft** | `lyrics`, `lyric video`, `letra`, `legendado`, `traducao`, `traduzida`, `translated` | **15%** | Mesma musica, overlay visual diferente |
+
+**Regra bidirecional:**
+- Se o input **nao** menciona "live" mas o candidato tem "Live" no titulo -> penalidade aplicada
+- Se o input **menciona** "live" mas o candidato e a versao studio -> penalidade aplicada
+- Se ambos coincidem (ou nenhum tem) -> sem penalidade
+
+**Exemplos:**
+
 ```
-Input:    "Trivium - Unti   The World Goes Cold"  (typo + espaços extras)
-Spotify:  "Until The World Goes Cold" by Trivium
-Score:    98% → FOUND ✓
+Input:     "Hamurabi"
+Candidato: "Hamurabi (Live)" -> penalidade 50% -> studio preferido
+Candidato: "Hamurabi"        -> sem penalidade -> selecionado
 
-Input:    "TPIY = Left behind"  (abreviação + separador errado)
-Spotify:  "Left Behind" by The Plot In You
-Score:    78% → FOUND ✓
+Input:     "Poppy - New Way Out"
+Candidato: "Poppy - New Way Out (Lyric Video)" -> penalidade 15% -> ainda aceito (70.7%)
 
-Input:    "Bring Me The Horizon - DArkSide"  (capitalização errada)
-Spotify:  "DArkSide" by Bring Me The Horizon
-Score:    100% → FOUND ✓
-
-Input:    "Hamurabi"  (sem artista)
-Spotify:  "Hamurabi" by There's No Face
-Score:    100% → FOUND ✓
-
-Input:    "BMTH - Doomed (maphra)"  (abreviação não resolvível)
-Score:    0% → NOT FOUND ✗
+Input:     "Song (Live)"
+Candidato: "Song (Live at Wembley)" -> sem penalidade -> selecionado
+Candidato: "Song"                   -> penalidade 50% -> live preferido
 ```
-
-**Limitação conhecida:** Abreviações de nomes de banda (MIW, BMTH) não são resolvidas automaticamente — a busca do Spotify não retorna resultados para siglas.
 
 ---
 
-## Segurança
+## Search Cache (Redis)
 
-| Camada | Proteção |
+O YouTube Data API v3 tem um **limite de 10.000 unidades/dia**. Cada busca custa 100 unidades, ou seja, uma playlist de 19 tracks consome ~2.900 unidades (search + create + add).
+
+O sistema usa **Redis como cache de busca** para evitar chamadas redundantes:
+
+| Aspecto | Valor |
+|---------|-------|
+| Key format | `search_cache:{platform}:{query}` |
+| TTL | 24 horas (alinhado com o reset de quota do YouTube) |
+| Graceful degradation | Se o Redis falhar, o cache e ignorado (log warning) |
+| Compartilhamento | Queries identicas entre jobs diferentes usam cache |
+
+**Custo estimado por playlist (19 tracks):**
+
+| Operacao | Units | Com cache miss | Com cache hit |
+|----------|-------|---------------|---------------|
+| Search | 100 x N | 1.900 | 0 |
+| Create playlist | 50 | 50 | 50 |
+| Add videos | 50 x N | 950 | 950 |
+| **Total** | | **2.900** | **1.000** |
+
+---
+
+## Seguranca
+
+| Camada | Protecao |
 |--------|----------|
-| **Nginx** | Rate limiting (10 req/s por IP, burst 20), security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy), request size limit (2 MB) |
-| **FastAPI** | Validação de input via Pydantic, sanitização de nomes de tracks (max 300 chars), validação de file type e encoding |
-| **File Parser** | Remoção de caracteres de controle, limite de 500 linhas, comentários ignorados |
+| **Nginx** | Rate limiting (10 req/s por IP, burst 20), security headers, request size limit (2 MB) |
+| **FastAPI** | Validacao de input via Pydantic, sanitizacao de nomes de tracks |
 | **OAuth 2.0** | State token para CSRF protection, tokens nunca armazenados no servidor |
-| **Docker** | Container roda como non-root user (`appuser`), Redis com senha |
-| **Celery** | `task_acks_late=True` (garante reprocessamento em caso de crash), rate limit por task |
+| **Google OAuth** | `access_type=offline` + `prompt=consent` garante refresh token |
+| **Spotify OAuth** | `show_dialog=true` forca re-autorizacao com scopes corretos |
+| **OAuth Package** | Codigo sensivel isolado em `app/services/oauth/` (zona de seguranca) |
+| **Docker** | Container roda como non-root user, Redis com senha |
+| **Celery** | `task_acks_late=True`, rate limit por task |
 
 ---
 
 ## Testes
 
-O projeto possui **142 testes** organizados em 6 fases:
+O projeto possui **209 testes** organizados em 7 fases:
 
 | Fase | Arquivo | Testes | Escopo |
 |------|---------|--------|--------|
 | 1 | `test_phase1_infra.py` | 19 | Health check, Settings, estrutura do projeto |
-| 2 | `test_phase2_domain.py` | 35 | Domain models, file parser, sanitização |
-| 3 | `test_phase3_auth.py` | 18 | OAuth 2.0 flow (login, callback, refresh) |
+| 2 | `test_phase2_domain.py` | 35 | Domain models, file parser, MatchCandidate |
+| 3 | `test_phase3_auth.py` | 32 | OAuth multi-plataforma (Spotify + Google + factory + rotas) |
 | 4 | `test_phase4_worker.py` | 27 | Backoff, Circuit Breaker, SpotifyClient, Celery tasks |
-| 5 | `test_phase5_fuzzy.py` | 22 | Fuzzy matching, normalização, edge cases |
-| 6 | `test_phase6_delivery.py` | 21 | Reports, integração end-to-end, schemas |
+| 5 | `test_phase5_fuzzy.py` | 36 | Fuzzy matching, normalizacao, version penalty |
+| 6 | `test_phase6_delivery.py` | 21 | Reports e integracao end-to-end |
+| 10 | `test_phase10_youtube.py` | 39 | YouTubeMusicClient, SearchCache, playlist creation |
 
 ```bash
 # Rodar todos os testes
@@ -500,115 +480,141 @@ pytest
 # Com coverage
 pytest --cov=app --cov-report=html
 
-# Fase específica
-pytest tests/test_phase4_worker.py -v
+# Fase especifica
+pytest tests/test_phase10_youtube.py -v
 ```
 
 ---
 
-## Configuração do Spotify Developer
+## Configuracao do Spotify Developer
 
 1. Acesse o [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 2. Crie um novo app com nome descritivo
-3. Em **Redirect URIs**, adicione: `http://127.0.0.1:8080/api/v1/auth/callback`
+3. Em **Redirect URIs**, adicione: `http://127.0.0.1:8080/api/v1/auth/spotify/callback`
 4. Selecione **Web API** como API/SDK utilizada
-5. Em **User Management**, adicione o email da conta Spotify que usará o app
+5. Em **User Management**, adicione o email da conta Spotify que usara o app
 6. Copie o **Client ID** e **Client Secret** para o `.env`
 
-> **Importante (Development Mode):**
+> **Development Mode:**
 > - Requer **Spotify Premium** na conta do owner
-> - Apenas usuários listados em **User Management** podem usar operações de escrita (criar playlist, adicionar tracks)
-> - Máximo de **5 usuários** em Development Mode
-> - A API usa endpoints `/me/playlists` e `/playlists/{id}/items` (compatíveis com Dev Mode)
+> - Apenas usuarios listados em **User Management** podem usar operacoes de escrita
+> - Maximo de **5 usuarios**
+> - A API usa endpoints `/me/playlists` e `/playlists/{id}/items` (compativeis com Dev Mode)
+
+---
+
+## Configuracao do Google Cloud (YouTube Music)
+
+1. Acesse o [Google Cloud Console](https://console.cloud.google.com)
+2. Crie um novo projeto (ex: "Playlist Migration")
+3. Em **APIs & Services > Library**, ative **YouTube Data API v3**
+4. Em **APIs & Services > OAuth consent screen**:
+   - Tipo: **Externo**
+   - Preencha nome, email de suporte e email do developer
+   - Em **Test users**, adicione o email da conta Google que usara o app
+5. Em **APIs & Services > Credentials**:
+   - Crie um **OAuth client ID** (tipo: Web application)
+   - Em **Authorized redirect URIs**, adicione: `http://127.0.0.1:8080/api/v1/auth/youtube_music/callback`
+6. Copie o **Client ID** e **Client Secret** para o `.env`
+
+> **Quota:**
+> - Limite padrao: **10.000 unidades/dia**
+> - Cada busca: 100 unidades | Criar playlist: 50 | Adicionar video: 50
+> - Uma playlist de 19 tracks custa ~2.900 unidades (~3 playlists/dia)
+> - O cache Redis reduz o custo para ~1.000 unidades em buscas repetidas
+
+---
+
+## Teste E2E Real — Spotify
+
+Teste com playlist real de 19 faixas de metalcore/post-hardcore:
+
+| Metrica | Valor |
+|---------|-------|
+| Total de tracks | 19 |
+| Encontradas | 18 |
+| Nao encontradas | 1 |
+| Taxa de sucesso | **94.7%** |
+| Playlist | [Abrir no Spotify](https://open.spotify.com/playlist/0HLLTzqP2AwcvjGmW8r3GC) |
+
+**Desafios superados pelo fuzzy matching:**
+
+| Input (com erros) | Resultado | Confianca |
+|-------------------|-----------|-----------|
+| `Trivium - Unti   The World Goes Cold` (typo) | Until The World Goes Cold | 98% |
+| `TPIY = Left behind` (abreviacao + separador errado) | Left Behind - The Plot In You | 78% |
+| `Bring Me The Horizon - DArkSide` (case errado) | DArkSide | 100% |
+| `There's No Face - Hamurabi` (sem artista popular) | Hamurabi | 100% |
+| `Falling In Reverse - "God Is A Weapon` (aspas soltas) | God Is A Weapon | 100% |
+
+**Limitacao:** `BMTH - Doomed (maphra)` — abreviacoes de banda (BMTH) nao sao resolvidas pela API do Spotify.
+
+---
+
+## Teste E2E Real — YouTube Music
+
+Mesma playlist de 19 faixas, migrada para YouTube Music:
+
+| Metrica | Valor |
+|---------|-------|
+| Total de tracks | 19 |
+| Encontradas | 19 |
+| Nao encontradas | 0 |
+| Taxa de sucesso | **100%** |
+| Playlist | [Abrir no YouTube Music](https://music.youtube.com/playlist?list=PLup2tHzYZNwVGy3Q2zAsf0qskxhgdMqSy) |
+
+**Destaques:**
+
+| Input | Confianca | Observacao |
+|-------|-----------|------------|
+| `Bring Me The Horizon - Doomed (maphra)` | 100% | Track que falhou no Spotify foi encontrada no YouTube |
+| `TPIY = Left behind` | 62.8% | Abreviacao + separador `=` resolvidos |
+| `Poppy - New Way Out` | 70.7% | Soft penalty aplicada (lyric video) — ainda aceito |
+| `There's No Face - Hamurabi` | 77.3% | Versao studio selecionada (live penalizada) |
+| `POPPY, AMY LEE, COURTNEY LAPLANTE - End of You` | 92.2% | Multiplos artistas |
+| `Pierce The Veil - King for a Day` | 100% | Match exato |
+
+**Version penalty em acao:**
+- `Hamurabi` — versao live disponivel mas studio selecionada (hard penalty 50%)
+- `New Way Out` — apenas lyric videos disponiveis, soft penalty (15%) manteve acima do threshold
 
 ---
 
 ## Extensibilidade
 
-Para adicionar uma nova plataforma (ex: YouTube Music):
+Para adicionar uma nova plataforma (ex: Deezer):
 
 ```python
 # 1. Criar o client implementando a interface
-class YouTubeClient(MusicPlatform):
-    async def search_track(self, track: Track, access_token: str) -> Track: ...
-    async def create_playlist(self, name: str, track_ids: list[str], access_token: str) -> str: ...
-    async def get_user_id(self, access_token: str) -> str: ...
+class DeezerClient(MusicPlatform):
+    async def search_track(self, track, access_token): ...
+    async def create_playlist(self, name, track_ids, access_token): ...
+    async def get_user_id(self, access_token): ...
 
-# 2. Adicionar ao enum
+# 2. Criar o OAuth provider
+class DeezerOAuthProvider(OAuthProvider):
+    def build_auth_url(self): ...
+    async def exchange_code(self, code): ...
+    async def refresh_access_token(self, refresh_token): ...
+
+# 3. Adicionar ao enum
 class PlatformEnum(str, Enum):
     SPOTIFY = "spotify"
-    YOUTUBE = "youtube"  # novo
+    YOUTUBE_MUSIC = "youtube_music"
+    DEEZER = "deezer"  # novo
 
-# 3. Registrar no factory (app/main.py)
-PlatformFactory.register(PlatformEnum.YOUTUBE, YouTubeClient)
+# 4. Registrar nos factories (app/main.py)
+PlatformFactory.register(PlatformEnum.DEEZER, DeezerClient)
+OAuthProviderFactory.register(PlatformEnum.DEEZER, DeezerOAuthProvider)
 ```
 
-Nenhuma alteração necessária na lógica de processamento, workers ou routes.
+Nenhuma alteracao necessaria na logica de processamento, workers, rotas ou fuzzy matching.
 
 ---
 
-## Teste E2E Real
+## Licenca
 
-Teste realizado com uma playlist real de 19 faixas de metalcore/post-hardcore:
-
-```
-============================================================
-  PLAYLIST MIGRATION REPORT
-  Generated: 2026-04-09 02:10:44 UTC
-============================================================
-
-SUMMARY
-----------------------------------------
-  Total tracks:     19
-  Found:            18
-  Not found:        1
-  Errors:           0
-  Success rate:     94.7%
-
-  Playlist URL: https://open.spotify.com/playlist/0HLLTzqP2AwcvjGmW8r3GC
-
-TRACK DETAILS
-----------------------------------------
-
-  FOUND (18):
-    [OK]  Motionless In White - Afraid of the dark  (confidence: 100%)
-    [OK]  BO - like a villain  (confidence: 69%)
-    [OK]  I Prevail - RAIN  (confidence: 100%)
-    [OK]  TPIY = Left behind  (confidence: 78%)
-    [OK]  The Amity Affliction - Death's Hand  (confidence: 100%)
-    [OK]  Bring Me The Horizon - 1x1  (confidence: 100%)
-    [OK]  Trivium - Unti   The World Goes Cold  (confidence: 98%)
-    [OK]  Bring Me The Horizon - DArkSide  (confidence: 100%)
-    [OK]  Falling In Reverse - "God Is A Weapon  (confidence: 100%)
-    [OK]  Poppy - New Way Out  (confidence: 100%)
-    [OK]  POPPY, AMY LEE, COURTNEY LAPLANTE - End of You  (confidence: 64%)
-    [OK]  Pierce The Veil - King for a Day  (confidence: 100%)
-    [OK]  Motionless In White - Masterpiece  (confidence: 100%)
-    [OK]  Bring Me The Horizon - sTraNgeRs  (confidence: 100%)
-    [OK]  Motionless In White - Werewolf  (confidence: 100%)
-    [OK]  There's No Face - Hamurabi  (confidence: 100%)
-    [OK]  BAD OMENS - Dying To Love  (confidence: 100%)
-    [OK]  Motionless In White - Cyberhex  (confidence: 100%)
-
-  NOT FOUND (1):
-    [--]  Bring Me The Horizon - Doomed (maphra)  (best match confidence: 0%)
-
-============================================================
-```
-
-**Desafios superados pelo fuzzy matching:**
-- Typos: `Unti` → `Until` (98% confidence)
-- Separador errado: `TPIY = Left behind` (78%)
-- Capitalização inconsistente: `DArkSide`, `sTraNgeRs` (100%)
-- Aspas soltas: `"God Is A Weapon` (100%)
-- Sem artista: `Hamurabi` → encontrou `There's No Face - Hamurabi` (100%)
-- Múltiplos artistas: `POPPY, AMY LEE, COURTNEY LAPLANTE` (64%)
-
----
-
-## Licença
-
-Este projeto é de uso pessoal/educacional.
+Este projeto e de uso pessoal/educacional.
 
 ---
 

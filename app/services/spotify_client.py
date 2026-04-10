@@ -18,7 +18,7 @@ from app.core.resilience import (
     request_with_backoff,
 )
 from app.domain.interfaces import MusicPlatform
-from app.domain.models import Track, TrackStatus
+from app.domain.models import MatchCandidate, Track, TrackStatus
 from app.services.fuzzy_matcher import pick_best_match
 
 logger = logging.getLogger(__name__)
@@ -180,10 +180,20 @@ class SpotifyClient(MusicPlatform):
             track.status = TrackStatus.NOT_FOUND
             return track
 
+        candidates = [
+            MatchCandidate(
+                id=item["id"],
+                uri=item["uri"],
+                title=item.get("name", ""),
+                artist=item["artists"][0]["name"] if item.get("artists") else "",
+            )
+            for item in items
+        ]
+
         best, score = pick_best_match(
             input_title=track.title,
             input_artist=track.artist,
-            candidates=items,
+            candidates=candidates,
             threshold=confidence_threshold,
         )
 
@@ -192,8 +202,8 @@ class SpotifyClient(MusicPlatform):
             track.confidence = score / 100.0
             return track
 
-        track.platform_id = best["id"]
-        track.platform_uri = best["uri"]
+        track.platform_id = best.id
+        track.platform_uri = best.uri
         track.status = TrackStatus.FOUND
         track.confidence = score / 100.0
 

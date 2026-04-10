@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class PlatformEnum(str, Enum):
     SPOTIFY = "spotify"
+    YOUTUBE_MUSIC = "youtube_music"
 
 
 class PlaylistCreateRequest(BaseModel):

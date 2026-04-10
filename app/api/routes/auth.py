@@ -1,4 +1,4 @@
-"""Auth routes — Spotify OAuth 2.0 Authorization Code Flow."""
+"""Auth routes — OAuth 2.0 Authorization Code Flow (multi-platform)."""
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -7,34 +7,32 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     TokenResponseSchema,
 )
-from app.services.spotify_auth import SpotifyAuthError, SpotifyAuthService
+from app.schemas.playlist import PlatformEnum
+from app.services.oauth import OAuthError, OAuthProviderFactory
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
-def _get_auth_service() -> SpotifyAuthService:
-    return SpotifyAuthService()
-
-
-@router.get("/login", response_model=AuthURLResponse)
-async def login() -> AuthURLResponse:
-    """Generate a Spotify authorization URL.
+@router.get("/{platform}/login", response_model=AuthURLResponse)
+async def login(platform: PlatformEnum) -> AuthURLResponse:
+    """Generate an authorization URL for the given platform.
 
     The client should redirect the user to `auth_url`.
     The `state` value must be stored client-side and validated in the callback
     to prevent CSRF attacks.
     """
-    service = _get_auth_service()
-    url, state = service.build_auth_url()
+    provider = _get_provider(platform)
+    url, state = provider.build_auth_url()
     return AuthURLResponse(auth_url=url, state=state)
 
 
-@router.get("/callback", response_model=TokenResponseSchema)
+@router.get("/{platform}/callback", response_model=TokenResponseSchema)
 async def callback(
+    platform: PlatformEnum,
     code: str = Query(..., min_length=1),
     state: str = Query(..., min_length=1),
 ) -> TokenResponseSchema:
-    """Handle Spotify's OAuth callback.
+    """Handle the OAuth callback for the given platform.
 
     Exchanges the authorization code for access + refresh tokens.
 
@@ -42,13 +40,13 @@ async def callback(
     the value stored during /login. This validation is the client's
     responsibility (the API is stateless).
     """
-    service = _get_auth_service()
+    provider = _get_provider(platform)
     try:
-        token = await service.exchange_code(code)
-    except SpotifyAuthError as e:
+        token = await provider.exchange_code(code)
+    except OAuthError as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Spotify auth failed: {e}",
+            detail=f"{platform.value} auth failed: {e}",
         )
 
     return TokenResponseSchema(
@@ -59,16 +57,19 @@ async def callback(
     )
 
 
-@router.post("/refresh", response_model=TokenResponseSchema)
-async def refresh_token(body: RefreshTokenRequest) -> TokenResponseSchema:
-    """Refresh an expired access token."""
-    service = _get_auth_service()
+@router.post("/{platform}/refresh", response_model=TokenResponseSchema)
+async def refresh_token(
+    platform: PlatformEnum,
+    body: RefreshTokenRequest,
+) -> TokenResponseSchema:
+    """Refresh an expired access token for the given platform."""
+    provider = _get_provider(platform)
     try:
-        token = await service.refresh_access_token(body.refresh_token)
-    except SpotifyAuthError as e:
+        token = await provider.refresh_access_token(body.refresh_token)
+    except OAuthError as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Spotify token refresh failed: {e}",
+            detail=f"{platform.value} token refresh failed: {e}",
         )
 
     return TokenResponseSchema(
@@ -77,3 +78,14 @@ async def refresh_token(body: RefreshTokenRequest) -> TokenResponseSchema:
         expires_in=token.expires_in,
         token_type=token.token_type,
     )
+
+
+def _get_provider(platform: PlatformEnum):
+    """Resolve an OAuthProvider from the factory or raise 404."""
+    try:
+        return OAuthProviderFactory.create(platform)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Platform '{platform.value}' has no registered OAuth provider",
+        )

@@ -16,11 +16,23 @@ class Settings(BaseSettings):
     # ── Spotify OAuth 2.0 ──
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
-    spotify_redirect_uri: str = "http://127.0.0.1:8080/api/v1/auth/callback"
+    spotify_redirect_uri: str = "http://127.0.0.1:8080/api/v1/auth/spotify/callback"
     spotify_scopes: str = "playlist-modify-public playlist-modify-private"
     spotify_auth_url: str = "https://accounts.spotify.com/authorize"
     spotify_token_url: str = "https://accounts.spotify.com/api/token"
     spotify_api_base_url: str = "https://api.spotify.com/v1"
+
+    # ── Google OAuth 2.0 (YouTube Music) ──
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://127.0.0.1:8080/api/v1/auth/youtube_music/callback"
+    google_scopes: str = "https://www.googleapis.com/auth/youtube"
+    google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"
+    youtube_api_base_url: str = "https://www.googleapis.com/youtube/v3"
+
+    # ── Search Cache ──
+    search_cache_ttl: int = 86400  # 24h — matches YouTube quota reset
 
     # ── Celery ──
     celery_broker_url: str = ""

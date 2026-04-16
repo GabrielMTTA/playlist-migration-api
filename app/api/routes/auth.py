@@ -1,7 +1,9 @@
 """Auth routes — OAuth 2.0 Authorization Code Flow (multi-platform)."""
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 
+from app.core.config import settings
 from app.schemas.auth import (
     AuthURLResponse,
     RefreshTokenRequest,
@@ -26,35 +28,35 @@ async def login(platform: PlatformEnum) -> AuthURLResponse:
     return AuthURLResponse(auth_url=url, state=state)
 
 
-@router.get("/{platform}/callback", response_model=TokenResponseSchema)
+@router.get("/{platform}/callback")
 async def callback(
     platform: PlatformEnum,
     code: str = Query(..., min_length=1),
     state: str = Query(..., min_length=1),
-) -> TokenResponseSchema:
+):
     """Handle the OAuth callback for the given platform.
 
-    Exchanges the authorization code for access + refresh tokens.
-
-    Note: In production, the `state` parameter should be validated against
-    the value stored during /login. This validation is the client's
-    responsibility (the API is stateless).
+    Exchanges the authorization code for access + refresh tokens,
+    then redirects to the frontend with tokens as query parameters.
     """
     provider = _get_provider(platform)
     try:
         token = await provider.exchange_code(code)
     except OAuthError as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"{platform.value} auth failed: {e}",
+        frontend_error_url = (
+            f"{settings.frontend_url}/auth/callback"
+            f"?error=auth_failed&platform={platform.value}"
         )
+        return RedirectResponse(url=frontend_error_url)
 
-    return TokenResponseSchema(
-        access_token=token.access_token,
-        refresh_token=token.refresh_token,
-        expires_in=token.expires_in,
-        token_type=token.token_type,
+    frontend_callback_url = (
+        f"{settings.frontend_url}/auth/callback"
+        f"?access_token={token.access_token}"
+        f"&refresh_token={token.refresh_token}"
+        f"&expires_in={token.expires_in}"
+        f"&platform={platform.value}"
     )
+    return RedirectResponse(url=frontend_callback_url)
 
 
 @router.post("/{platform}/refresh", response_model=TokenResponseSchema)

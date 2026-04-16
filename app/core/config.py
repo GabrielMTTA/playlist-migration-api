@@ -8,11 +8,8 @@ class Settings(BaseSettings):
     app_name: str = "Playlist Migration API"
     debug: bool = False
     frontend_url: str = "http://localhost:3000"
+    # Comma-separated list of allowed CORS origins
     cors_origins_str: str = "http://localhost:3000"
-
-    @property
-    def cors_origins(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins_str.split(",")]
 
     # ── Redis ──
     redis_password: str = "changeme"

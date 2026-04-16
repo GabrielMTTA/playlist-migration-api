@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "Playlist Migration API"
     debug: bool = False
     frontend_url: str = "http://localhost:3000"
+    cors_origins: list[str] = ["http://localhost:3000"]
 
     # ── Redis ──
     redis_password: str = "changeme"

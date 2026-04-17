@@ -46,9 +46,35 @@ class SpotifyClient(MusicPlatform):
 
         Builds a query from artist + title if available,
         otherwise uses the raw input.
+        Retries with artist/title swapped when the first attempt returns
+        NOT_FOUND — handles "Song - Artist" input order.
         """
         _circuit.ensure_closed()
 
+        result = await self._search_once(track, access_token)
+
+        # Retry with swapped order (Song - Artist → Artist - Song)
+        if (
+            result.status == TrackStatus.NOT_FOUND
+            and track.artist
+            and track.title
+        ):
+            swapped = Track(
+                raw_input=track.raw_input,
+                title=track.artist,
+                artist=track.title,
+            )
+            swapped_result = await self._search_once(swapped, access_token)
+            if swapped_result.status == TrackStatus.FOUND:
+                logger.debug(
+                    "Found track with swapped order: %s", track.raw_input
+                )
+                return swapped_result
+
+        return result
+
+    async def _search_once(self, track: Track, access_token: str) -> Track:
+        """Single Spotify search attempt for a track."""
         query = self._build_search_query(track)
 
         async with httpx.AsyncClient(timeout=10.0) as client:

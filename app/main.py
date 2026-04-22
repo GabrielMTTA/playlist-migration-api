@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.playlist import router as playlist_router
+from app.api.routes.waitlist import router as waitlist_router
 from app.core.config import settings
 from app.schemas.playlist import PlatformEnum
 from app.services.oauth import GoogleOAuthProvider, OAuthProviderFactory, SpotifyOAuthProvider
@@ -26,6 +27,7 @@ OAuthProviderFactory.register(PlatformEnum.YOUTUBE_MUSIC, GoogleOAuthProvider)
 
 app.include_router(auth_router)
 app.include_router(playlist_router)
+app.include_router(waitlist_router)
 
 
 @app.get("/health")

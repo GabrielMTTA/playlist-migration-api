@@ -56,7 +56,7 @@ services:
     command: >
       redis-server
       --maxmemory 128mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy volatile-lru
       --requirepass ${REDIS_PASSWORD:-changeme}
     expose:
       - "6379"

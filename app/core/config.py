@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     google_token_url: str = "https://oauth2.googleapis.com/token"
     youtube_api_base_url: str = "https://www.googleapis.com/youtube/v3"
 
+    # ── Waitlist ──
+    waitlist_admin_key: str = ""   # Required in production — set in .env
+
     # ── Search Cache ──
     search_cache_ttl: int = 86400  # 24h — matches YouTube quota reset
 

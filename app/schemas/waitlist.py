@@ -12,12 +12,20 @@ class WaitlistEntryResponse(BaseModel):
 
 
 class WaitlistAdminEntry(BaseModel):
+    id: str
     name: str
     contact_email: str
     spotify_email: str
     submitted_at: str
+    approved: bool = False
+    approved_at: str | None = None
 
 
 class WaitlistAdminResponse(BaseModel):
     total: int
     entries: list[WaitlistAdminEntry]
+
+
+class ApproveResponse(BaseModel):
+    ok: bool
+    message: str

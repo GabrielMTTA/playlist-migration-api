@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # ── Waitlist ──
     waitlist_admin_key: str = ""   # Required in production — set in .env
 
+    # ── Resend (e-mail) ──
+    resend_api_key: str = ""
+    resend_from_email: str = "TuneShip <noreply@tuneship.app>"
+
     # ── Search Cache ──
     search_cache_ttl: int = 86400  # 24h — matches YouTube quota reset
 

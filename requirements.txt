@@ -16,6 +16,9 @@ email-validator==2.2.0
 # HTTP Client (async)
 httpx==0.28.1
 
+# E-mail (Resend)
+resend==2.10.0
+
 # Fuzzy Matching (Phase 5)
 rapidfuzz==3.11.0
 

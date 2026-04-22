@@ -9,7 +9,9 @@ redis==5.2.1
 
 # Validation & Settings
 pydantic==2.10.4
+pydantic[email]==2.10.4
 pydantic-settings==2.7.1
+email-validator==2.2.0
 
 # HTTP Client (async)
 httpx==0.28.1

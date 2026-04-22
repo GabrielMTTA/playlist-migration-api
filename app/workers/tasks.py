@@ -109,12 +109,28 @@ async def _process_playlist_async(
     # ── Step 2: Create playlist with found tracks ──
     if found_ids:
         try:
-            playlist_url = await client.create_playlist(
+            playlist_url, failed_ids = await client.create_playlist(
                 name=playlist_name,
                 track_ids=found_ids,
                 access_token=access_token,
             )
             result.playlist_url = playlist_url
+
+            # Reconcile: tracks found in search but not added to playlist
+            if failed_ids:
+                failed_set = set(failed_ids)
+                for track in tracks:
+                    if (
+                        track.status == TrackStatus.FOUND
+                        and track.platform_id in failed_set
+                    ):
+                        track.status = TrackStatus.ERROR
+                        result.found -= 1
+                        result.errors += 1
+                        logger.warning(
+                            "Track found but not added to playlist: %s",
+                            track.raw_input,
+                        )
         except Exception as exc:
             logger.error("Playlist creation failed: %s", exc)
 

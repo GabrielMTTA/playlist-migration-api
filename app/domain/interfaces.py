@@ -33,7 +33,7 @@ class MusicPlatform(ABC):
         name: str,
         track_ids: list[str],
         access_token: str,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         """Create a playlist on the platform.
 
         Args:
@@ -42,7 +42,9 @@ class MusicPlatform(ABC):
             access_token: User's OAuth token.
 
         Returns:
-            URL or URI of the created playlist.
+            Tuple of (playlist_url, failed_ids) where failed_ids contains
+            any track IDs that were found but could not be added to the
+            playlist (e.g. due to quota exhaustion or API errors).
         """
 
     @abstractmethod

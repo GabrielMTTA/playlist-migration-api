@@ -110,9 +110,17 @@ class SpotifyClient(MusicPlatform):
         name: str,
         track_ids: list[str],
         access_token: str,
-    ) -> str:
-        """Create a Spotify playlist and add tracks to it."""
+    ) -> tuple[str, list[str]]:
+        """Create a Spotify playlist and add tracks to it.
+
+        Returns:
+            Tuple of (playlist_url, failed_ids). Spotify uses batch inserts
+            so failures affect entire batches — all IDs in a failed batch
+            are reported as failed.
+        """
         _circuit.ensure_closed()
+
+        failed_ids: list[str] = []
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             headers = {
@@ -145,6 +153,7 @@ class SpotifyClient(MusicPlatform):
             uris = [f"spotify:track:{tid}" for tid in track_ids]
             for i in range(0, len(uris), 100):
                 batch = uris[i : i + 100]
+                batch_ids = track_ids[i : i + 100]
                 add_response = await request_with_backoff(
                     client,
                     "POST",
@@ -158,9 +167,10 @@ class SpotifyClient(MusicPlatform):
                         "Failed to add batch %d to playlist: %s",
                         i // 100, add_response.text,
                     )
+                    failed_ids.extend(batch_ids)
 
         _circuit.record_success()
-        return playlist_url
+        return playlist_url, failed_ids
 
     async def get_user_id(self, access_token: str) -> str:
         """Retrieve the authenticated Spotify user's ID."""

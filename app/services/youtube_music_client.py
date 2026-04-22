@@ -136,13 +136,19 @@ class YouTubeMusicClient(MusicPlatform):
         name: str,
         track_ids: list[str],
         access_token: str,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         """Create a YouTube playlist and add videos to it.
 
         Quota cost: 50 (create) + 50 per video = 50 + 50N units.
         YouTube has no batch insert — each video is a separate API call.
+
+        Returns:
+            Tuple of (playlist_url, failed_ids) where failed_ids contains
+            video IDs that could not be inserted (e.g. quota exhausted).
         """
         _circuit.ensure_closed()
+
+        failed_ids: list[str] = []
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             headers = {
@@ -202,9 +208,10 @@ class YouTubeMusicClient(MusicPlatform):
                         "Failed to add video %s to playlist: %s",
                         video_id, add_response.text,
                     )
+                    failed_ids.append(video_id)
 
         _circuit.record_success()
-        return playlist_url
+        return playlist_url, failed_ids
 
     async def get_user_id(self, access_token: str) -> str:
         """Retrieve the authenticated user's YouTube channel ID."""
